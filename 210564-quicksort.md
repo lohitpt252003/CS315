@@ -1,5 +1,7 @@
 # External Quicksort Assignment
-**Course: CS315**
+**Course: CS315** <br>
+**Roll Number: 210564** <br>
+**Name: Lohit P Talavar**
 
 ## Overview
 This is my implementation for the external quicksort assignment. It sorts a really large list of numbers that dont fit into the main memory all at once. The code simulates how a real hard drive would work by keeping track of the disk blocks and counting every time we have to do a disk seek or transfer.
@@ -61,4 +63,4 @@ You can run it yourself by using the makefile: `make` to compile then `./externa
 - `external_quicksort.cpp`: The main C++ code
 - `Makefile`: to compile it easily
 - `generate_input.py`: A python script I made to create random numbers for testing
-- `writeup.md`: This file.
+- `210564-quicksort.md`: This file.
