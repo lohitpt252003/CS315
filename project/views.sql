@@ -1,12 +1,11 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
 -- Milestone 6: Views
--- Run after: schema.sql, seed.sql
+-- run after schema.sql and seed.sql
 
--- ============================================================
 -- VIEW 1: student_transcript
--- One row per (student, course) enrollment.
--- Shows full course history (completed + currently enrolled).
--- ============================================================
+-- shows everything a student has enrolled in, both current and past
+-- useful for checking course history or generating a transcript
+-- usage: SELECT * FROM student_transcript WHERE roll_no = '22CS001';
 
 CREATE OR REPLACE VIEW student_transcript AS
 SELECT
@@ -33,15 +32,11 @@ JOIN   Departments d_s ON s.dept_id       = d_s.dept_id
 JOIN   Departments d_c ON c.dept_id       = d_c.dept_id
 ORDER  BY s.roll_no, e.status, c.course_code;
 
--- Sample query: Alice's full transcript
--- SELECT * FROM student_transcript WHERE roll_no = '22CS001';
 
-
--- ============================================================
 -- VIEW 2: course_roster
--- One row per (course, enrolled student).
--- Shows instructor, seats used, and remaining capacity.
--- ============================================================
+-- shows all students enrolled in each course along with remaining seats
+-- instructors can use this to see whos in their class
+-- usage: SELECT * FROM course_roster WHERE course_code = 'CS201';
 
 CREATE OR REPLACE VIEW course_roster AS
 SELECT
@@ -67,16 +62,10 @@ LEFT JOIN Enrollments e ON c.course_id  = e.course_id
 LEFT JOIN Students    s ON e.student_id = s.student_id
 ORDER  BY c.course_code, s.roll_no;
 
--- Sample query: who is in CS201?
--- SELECT course_code, student_name, seats_remaining FROM course_roster WHERE course_code = 'CS201';
 
-
--- ============================================================
 -- VIEW 3: department_summary
--- One row per department.
--- Shows total courses offered, total active enrollments, and
--- average seat occupancy (%).
--- ============================================================
+-- one row per department with total courses, total students enrolled, and occupancy %
+-- usage: SELECT * FROM department_summary;
 
 CREATE OR REPLACE VIEW department_summary AS
 SELECT
@@ -97,16 +86,10 @@ LEFT JOIN Instructors  i ON d.dept_id = i.dept_id
 GROUP  BY d.dept_id, d.dept_name, d.dept_code
 ORDER  BY d.dept_name;
 
--- Sample query: view all departments
--- SELECT * FROM department_summary;
 
-
--- ============================================================
--- QUICK VIEW VERIFICATION
--- ============================================================
-
-SELECT 'student_transcript rows' AS view_name, COUNT(*) AS row_count FROM student_transcript
+-- quick sanity check to make sure all 3 views have data
+SELECT 'student_transcript' AS view_name, COUNT(*) AS rows FROM student_transcript
 UNION ALL
-SELECT 'course_roster rows',                  COUNT(*) FROM course_roster
+SELECT 'course_roster',                  COUNT(*) FROM course_roster
 UNION ALL
-SELECT 'department_summary rows',             COUNT(*) FROM department_summary;
+SELECT 'department_summary',             COUNT(*) FROM department_summary;

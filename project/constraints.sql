@@ -1,22 +1,18 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
--- Milestone 3: Business Logic & Constraints
--- Run after: schema.sql, seed.sql
+-- Milestone 3: Business Logic and Constraints
+-- run this after schema.sql and seed.sql
 
--- ============================================================
--- CONSTRAINT TRIGGER: check all three rules before enrollment
+-- This trigger runs BEFORE a student is inserted into Enrollments.
+-- It checks three things in order:
+--   1. Is the course full?
+--   2. Has the student completed all prerequisites?
+--   3. Does the timeslot clash with something they are already in?
+-- If any of these fail it raises an exception and the insert is cancelled.
 --
--- Fires BEFORE INSERT on Enrollments (when status = 'enrolled').
--- Raises an exception (aborting the insert) if any rule fails:
---   1. Seat limit  — enrolled_count >= capacity
---   2. Prerequisites — student has not completed all prereqs
---   3. Schedule conflict — timeslot overlaps an existing course
---
--- Note on schedule-day matching: the conflict check uses exact
--- schedule_day string equality (e.g. 'MWF' = 'MWF'). Courses
--- on day patterns that share individual days but differ as strings
--- (e.g. 'MWF' vs 'MW') are treated as non-conflicting. This is a
--- deliberate simplification for this project scope.
--- ============================================================
+-- Note: schedule conflict check only works if the schedule_day string
+-- is exactly same (like 'MWF' == 'MWF'). If one course is 'MWF' and
+-- another is 'MW' it wont detect the overlap. I know this is a limitation,
+-- kept it simple for now.
 
 CREATE OR REPLACE FUNCTION fn_check_enrollment_constraints()
 RETURNS TRIGGER AS $$
@@ -27,7 +23,7 @@ DECLARE
     v_prereq_met    INT;
     v_conflicts     INT;
 BEGIN
-    -- ── 1. Seat limit ──────────────────────────────────────────
+    -- check 1: is the course full?
     SELECT capacity, enrolled_count
       INTO v_capacity, v_enrolled
       FROM Courses
@@ -39,12 +35,14 @@ BEGIN
             NEW.course_id, v_enrolled, v_capacity;
     END IF;
 
-    -- ── 2. Prerequisites ───────────────────────────────────────
+    -- check 2: prerequisites
+    -- first count how many prereqs this course has
     SELECT COUNT(*) INTO v_prereq_total
       FROM Prerequisites
      WHERE course_id = NEW.course_id;
 
     IF v_prereq_total > 0 THEN
+        -- now count how many of those the student has actually completed
         SELECT COUNT(*) INTO v_prereq_met
           FROM Prerequisites p
          WHERE p.course_id = NEW.course_id
@@ -63,7 +61,8 @@ BEGIN
         END IF;
     END IF;
 
-    -- ── 3. Schedule conflict ───────────────────────────────────
+    -- check 3: schedule conflict
+    -- using time overlap formula: start1 < end2 AND start2 < end1
     SELECT COUNT(*) INTO v_conflicts
       FROM Enrollments  en
       JOIN Courses       c_existing ON en.course_id = c_existing.course_id
@@ -85,6 +84,8 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
+-- attach the trigger - fires before every insert on Enrollments
+-- but only when status is 'enrolled' (no point checking for waitlisted inserts)
 CREATE TRIGGER trg_check_enrollment
 BEFORE INSERT ON Enrollments
 FOR EACH ROW
@@ -92,61 +93,53 @@ WHEN (NEW.status = 'enrolled')
 EXECUTE FUNCTION fn_check_enrollment_constraints();
 
 
--- ============================================================
--- TEST CASES
--- Each DO block expects a specific outcome; a NOTICE confirms it.
--- ============================================================
+-- test cases to verify all three constraints work
 
--- ── Test 1: Full course (should FAIL) ─────────────────────────
--- CS201 is at capacity 3; a 4th enrollee must be rejected.
+-- test 1: CS201 is already at capacity (3/3), 4th student should be rejected
 DO $$
 BEGIN
     INSERT INTO Enrollments (student_id, course_id, status)
-    VALUES (3, 2, 'enrolled');   -- Charlie tries CS201 (full)
-    RAISE NOTICE 'Test 1 FAILED — insert should have been rejected.';
+    VALUES (3, 2, 'enrolled');   -- Charlie trying CS201
+    RAISE NOTICE 'Test 1 FAILED — should have been blocked.';
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE NOTICE 'Test 1 PASSED — seat limit enforced: %', SQLERRM;
+        RAISE NOTICE 'Test 1 PASSED — seat limit working: %', SQLERRM;
 END $$;
 
 
--- ── Test 2: Missing prerequisite (should FAIL) ────────────────
--- Charlie (year-1) has not completed CS201; CS315 requires it.
+-- test 2: Charlie hasn't done CS201 which is required for CS315
 DO $$
 BEGIN
     INSERT INTO Enrollments (student_id, course_id, status)
-    VALUES (3, 3, 'enrolled');   -- Charlie tries CS315 without CS201
-    RAISE NOTICE 'Test 2 FAILED — insert should have been rejected.';
+    VALUES (3, 3, 'enrolled');
+    RAISE NOTICE 'Test 2 FAILED — should have been blocked.';
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE NOTICE 'Test 2 PASSED — prereq enforced: %', SQLERRM;
+        RAISE NOTICE 'Test 2 PASSED — prereq check working: %', SQLERRM;
 END $$;
 
 
--- ── Test 3: Schedule conflict (should FAIL) ───────────────────
--- Charlie is enrolled in CS101 (MWF 09:00-10:00).
--- EE201 is also MWF 09:00-10:00 → overlap.
+-- test 3: EE201 is MWF 09:00-10:00, same as CS101 which Charlie is in
 DO $$
 BEGIN
     INSERT INTO Enrollments (student_id, course_id, status)
-    VALUES (3, 5, 'enrolled');   -- Charlie tries EE201 (same slot as CS101)
-    RAISE NOTICE 'Test 3 FAILED — insert should have been rejected.';
+    VALUES (3, 5, 'enrolled');
+    RAISE NOTICE 'Test 3 FAILED — should have been blocked.';
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE NOTICE 'Test 3 PASSED — schedule conflict enforced: %', SQLERRM;
+        RAISE NOTICE 'Test 3 PASSED — schedule conflict working: %', SQLERRM;
 END $$;
 
 
--- ── Test 4: Valid enrollment (should SUCCEED, then rolled back) ─
--- Charlie can enroll in EE301 (TTH 14:00-15:30) — no issues.
+-- test 4: EE301 should work fine for Charlie, rolling back after so data stays clean
 DO $$
 BEGIN
     SAVEPOINT sp_test4;
     INSERT INTO Enrollments (student_id, course_id, status)
-    VALUES (3, 6, 'enrolled');   -- Charlie enrolls in EE301 ✓
+    VALUES (3, 6, 'enrolled');
     RAISE NOTICE 'Test 4 PASSED — valid enrollment accepted.';
     ROLLBACK TO SAVEPOINT sp_test4;
 EXCEPTION
     WHEN OTHERS THEN
-        RAISE NOTICE 'Test 4 FAILED — unexpected rejection: %', SQLERRM;
+        RAISE NOTICE 'Test 4 FAILED — unexpected error: %', SQLERRM;
 END $$;

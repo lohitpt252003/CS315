@@ -1,18 +1,19 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
--- Milestone 5: Seat-Count Maintenance Triggers
--- Run after: schema.sql, seed.sql, constraints.sql
+-- Milestone 5: Seat Count Trigger
+-- run after schema.sql, seed.sql, constraints.sql
 
--- ============================================================
--- TRIGGER FUNCTION: keep Courses.enrolled_count in sync
+-- This trigger keeps enrolled_count in the Courses table accurate.
+-- Whenever someone enrolls, drops, or changes status the count gets updated.
+-- Without this the seat limit CHECK constraint wont work properly since
+-- enrolled_count would never change.
 --
--- Cases handled:
---   INSERT  status='enrolled'                → +1
---   INSERT  status='dropped'|'waitlisted'   → no change
---   UPDATE  'enrolled'  → 'dropped'|other   → -1
---   UPDATE  other       → 'enrolled'        → +1
---   DELETE  status='enrolled'               → -1
---   DELETE  other status                    → no change
--- ============================================================
+-- basically handles these cases:
+--   INSERT with status='enrolled'       -> +1
+--   INSERT with any other status        -> no change
+--   UPDATE from 'enrolled' to something -> -1
+--   UPDATE to 'enrolled' from something -> +1
+--   DELETE where status was 'enrolled'  -> -1
+--   DELETE any other status             -> no change
 
 CREATE OR REPLACE FUNCTION fn_sync_enrolled_count()
 RETURNS TRIGGER AS $$
@@ -25,11 +26,13 @@ BEGIN
         END IF;
 
     ELSIF TG_OP = 'UPDATE' THEN
+        -- student dropped the course
         IF OLD.status = 'enrolled' AND NEW.status <> 'enrolled' THEN
             UPDATE Courses
                SET enrolled_count = enrolled_count - 1
              WHERE course_id = NEW.course_id;
 
+        -- student re-enrolled or moved from waitlist to enrolled
         ELSIF OLD.status <> 'enrolled' AND NEW.status = 'enrolled' THEN
             UPDATE Courses
                SET enrolled_count = enrolled_count + 1
@@ -49,45 +52,42 @@ END;
 $$ LANGUAGE plpgsql;
 
 
--- Trigger for INSERT and DELETE
+-- one trigger for inserts and deletes
 CREATE TRIGGER trg_sync_count_insert_delete
 AFTER INSERT OR DELETE ON Enrollments
 FOR EACH ROW
 EXECUTE FUNCTION fn_sync_enrolled_count();
 
--- Trigger for UPDATE (status change, e.g. student drops a course)
+-- separate trigger for updates since status can change without insert/delete
 CREATE TRIGGER trg_sync_count_update
 AFTER UPDATE OF status ON Enrollments
 FOR EACH ROW
 EXECUTE FUNCTION fn_sync_enrolled_count();
 
 
--- ============================================================
--- SMOKE TESTS
--- ============================================================
+-- quick checks to make sure the trigger is working
 
--- Show seat counts before tests
+-- see counts before anything
 SELECT course_code, enrolled_count, capacity
 FROM   Courses
 WHERE  course_code IN ('EE301', 'CS315')
 ORDER  BY course_code;
 
--- Enroll Jack in EE301 (Jack is already enrolled — UNIQUE will
--- block this; illustrates that duplicate protection still works)
+-- try inserting Jack into EE301 again — should fail because of UNIQUE constraint
+-- just checking duplicate protection still works alongside the trigger
 DO $$
 BEGIN
     SAVEPOINT sp_smoke;
     INSERT INTO Enrollments (student_id, course_id, status)
-    VALUES (10, 6, 'enrolled');   -- Jack – EE301 (duplicate)
-    RAISE NOTICE 'Smoke test: insert succeeded (unexpected)';
+    VALUES (10, 6, 'enrolled');   -- Jack is already in EE301
+    RAISE NOTICE 'Smoke test: insert went through (not expected)';
     ROLLBACK TO SAVEPOINT sp_smoke;
 EXCEPTION
     WHEN unique_violation THEN
-        RAISE NOTICE 'Smoke test PASSED: duplicate enrollment blocked.';
+        RAISE NOTICE 'Smoke test PASSED: duplicate enrollment blocked as expected.';
 END $$;
 
--- Drop Frank from EE301 (status UPDATE: enrolled → dropped)
--- enrolled_count for EE301 should decrease by 1.
+-- drop Frank from EE301 and verify enrolled_count goes down by 1
 DO $$
 BEGIN
     SAVEPOINT sp_drop;
@@ -95,8 +95,9 @@ BEGIN
        SET status = 'dropped'
      WHERE student_id = 6 AND course_id = 6;
 
-    RAISE NOTICE 'Frank dropped EE301. Checking enrolled_count...';
+    RAISE NOTICE 'Frank dropped EE301. Checking count...';
 
+    -- verify count matches actual number of active enrollments
     PERFORM 1 FROM Courses
      WHERE course_id = 6
        AND enrolled_count = (
@@ -104,9 +105,9 @@ BEGIN
                 WHERE course_id = 6 AND status = 'enrolled'
            );
     IF FOUND THEN
-        RAISE NOTICE 'PASSED: enrolled_count matches actual count after drop.';
+        RAISE NOTICE 'PASSED: enrolled_count is correct after drop.';
     ELSE
-        RAISE NOTICE 'FAILED: enrolled_count mismatch after drop.';
+        RAISE NOTICE 'FAILED: enrolled_count is wrong after drop.';
     END IF;
 
     ROLLBACK TO SAVEPOINT sp_drop;

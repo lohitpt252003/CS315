@@ -1,10 +1,8 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
 -- Milestone 6: Analytical Queries
--- Run after: schema.sql, seed.sql, views.sql
+-- run after schema.sql, seed.sql, views.sql
 
--- ============================================================
--- A1: Top courses by enrollment (with occupancy %)
--- ============================================================
+-- A1: which courses are the most popular? sorted by how full they are
 SELECT
     c.course_code,
     c.title,
@@ -19,10 +17,8 @@ JOIN   Instructors i ON c.instructor_id = i.instructor_id
 ORDER  BY occupancy_pct DESC, c.enrolled_count DESC;
 
 
--- ============================================================
--- A2: Students with the heaviest course load
---     (count of current 'enrolled' courses + total credits)
--- ============================================================
+-- A2: who has the heaviest course load right now?
+-- shows total credits so you can see who might be overloading
 SELECT
     s.roll_no,
     s.name,
@@ -38,9 +34,7 @@ GROUP  BY s.student_id, s.roll_no, s.name, d.dept_code
 ORDER  BY total_credits DESC, courses_enrolled DESC;
 
 
--- ============================================================
--- A3: Courses below 50% capacity (under-subscribed)
--- ============================================================
+-- A3: courses that are less than 50% full — maybe not enough interest?
 SELECT
     c.course_code,
     c.title,
@@ -53,10 +47,7 @@ WHERE  c.enrolled_count::NUMERIC / c.capacity < 0.5
 ORDER  BY fill_pct ASC;
 
 
--- ============================================================
--- A4: Department enrollment breakdown
---     (courses offered, avg occupancy, most popular course)
--- ============================================================
+-- A4: department-level breakdown — how many courses, avg occupancy, and the most popular course per dept
 SELECT
     d.dept_name,
     d.dept_code,
@@ -76,11 +67,8 @@ GROUP  BY d.dept_id, d.dept_name, d.dept_code
 ORDER  BY total_students DESC NULLS LAST;
 
 
--- ============================================================
--- A5: Students who have completed prerequisites for a course
---     but are not yet enrolled in it (enrollment opportunity)
---     Example: who can still enroll in CS315?
--- ============================================================
+-- A5: who is eligible to enroll in CS315 but hasnt yet?
+-- eligible means they have all prereqs completed and arent already in the course
 WITH prereqs_for_course AS (
     SELECT prereq_course_id
     FROM   Prerequisites
@@ -89,12 +77,12 @@ WITH prereqs_for_course AS (
 eligible_students AS (
     SELECT s.student_id, s.roll_no, s.name
     FROM   Students s
-    WHERE  NOT EXISTS (          -- not already enrolled / completed
+    WHERE  NOT EXISTS (          -- not already enrolled or completed
                SELECT 1 FROM Enrollments e
                WHERE  e.student_id = s.student_id
                  AND  e.course_id  = 3
            )
-      AND  NOT EXISTS (          -- has all prereqs completed
+      AND  NOT EXISTS (          -- check all prereqs are completed
                SELECT 1 FROM prereqs_for_course p
                WHERE  NOT EXISTS (
                    SELECT 1 FROM Enrollments e2
@@ -113,9 +101,7 @@ WHERE  c.course_id = 3
 ORDER  BY es.roll_no;
 
 
--- ============================================================
--- A6: Instructor workload (number of courses and total students)
--- ============================================================
+-- A6: instructor workload — how many courses each prof is teaching and how many students total
 SELECT
     i.name          AS instructor,
     d.dept_code,

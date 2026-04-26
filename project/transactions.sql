@@ -1,50 +1,39 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
--- Milestone 5: Enrollment Transaction (ACID demonstration)
--- Run after: schema.sql, seed.sql, constraints.sql, triggers.sql
+-- Milestone 5: Enrollment Transaction
+-- run after schema.sql, seed.sql, constraints.sql, triggers.sql
 
--- ============================================================
--- ENROLLMENT TRANSACTION
+-- The point of this file is to show how a proper enrollment should happen
+-- using a transaction with FOR UPDATE so two students cant grab the same
+-- last seat at the same time.
 --
--- Safely enroll a student in a course:
---   1. Lock the Courses row to prevent concurrent seat theft.
---   2. Re-read enrolled_count inside the transaction.
---   3. Let the BEFORE-INSERT trigger validate constraints.
---   4. The AFTER-INSERT trigger increments enrolled_count.
---   5. COMMIT on success; ROLLBACK on any failure.
---
--- This pattern guarantees:
---   Atomicity   — both the Enrollment insert and count update
---                 succeed together, or neither does.
---   Consistency — constraint trigger keeps business rules intact.
---   Isolation   — FOR UPDATE lock prevents another transaction
---                 from stealing the last seat concurrently.
---   Durability  — COMMIT makes the change permanent.
--- ============================================================
+-- Flow:
+--   1. Lock the course row (FOR UPDATE)
+--   2. Try to insert into Enrollments
+--   3. constraint trigger checks prereqs, seats, schedule
+--   4. count trigger updates enrolled_count
+--   5. COMMIT or ROLLBACK depending on what happened
 
--- ── Example A: Successful enrollment ─────────────────────────
--- Charlie (student 3) enrolls in EE301 (course 6, TTH 14:00-15:30).
--- No prerequisites, plenty of seats, no schedule conflict.
+-- Example A: normal successful enrollment
+-- Charlie (student 3) enrolling in EE301 (course 6) - no issues expected
 
 BEGIN;
 
-    -- Lock the course row so no concurrent transaction changes
-    -- enrolled_count between our read and our write.
+    -- lock this course row so no other transaction can change enrolled_count
+    -- while we are in the middle of checking and inserting
     SELECT course_id, enrolled_count, capacity
       FROM Courses
      WHERE course_id = 6
        FOR UPDATE;
 
-    -- The constraint trigger (trg_check_enrollment) fires here
-    -- and validates seats, prereqs, and schedule conflicts.
+    -- the BEFORE INSERT trigger fires here and does all 3 checks
     INSERT INTO Enrollments (student_id, course_id, status)
     VALUES (3, 6, 'enrolled');
 
-    -- The count trigger (trg_sync_count_insert_delete) fires here
-    -- and increments enrolled_count for course 6.
+    -- the AFTER INSERT trigger fires here and increments enrolled_count
 
 COMMIT;
 
--- Verify the result
+-- confirm it worked
 SELECT c.course_code, c.enrolled_count, c.capacity,
        s.name AS newly_enrolled
 FROM   Enrollments e
@@ -53,55 +42,52 @@ JOIN   Students    s ON e.student_id = s.student_id
 WHERE  e.student_id = 3 AND e.course_id = 6;
 
 
--- ── Example B: Enrollment ROLLBACK on constraint violation ───
--- Try to enroll Charlie in CS201 (full). The constraint trigger
--- raises an exception, which aborts the transaction.
+-- Example B: trying to enroll in a full course, should rollback
+-- CS201 is already at capacity so this should fail cleanly
 
 DO $$
 BEGIN
-    BEGIN  -- Nested block to catch the exception cleanly
+    BEGIN
         INSERT INTO Enrollments (student_id, course_id, status)
         VALUES (3, 2, 'enrolled');   -- CS201 is full
-        RAISE NOTICE 'Example B: insert succeeded (unexpected).';
+        RAISE NOTICE 'Example B: went through (shouldnt have).';
     EXCEPTION
         WHEN OTHERS THEN
-            RAISE NOTICE 'Example B PASSED — transaction rolled back: %', SQLERRM;
+            RAISE NOTICE 'Example B PASSED — rolled back: %', SQLERRM;
     END;
 END $$;
 
 
--- ── Example C: Concurrent enrollment simulation ───────────────
--- Two transactions compete for the last seat in a course.
--- In real concurrent usage, the FOR UPDATE lock ensures only one
--- succeeds. Here we simulate with savepoints.
+-- Example C: simulate two students competing for the same seat
+-- in real concurrent usage the FOR UPDATE would make T2 wait for T1 to finish
+-- here we just simulate with savepoints to show the logic
 
 DO $$
 DECLARE
     v_enrolled INT;
     v_capacity INT;
 BEGIN
-    -- Simulate Transaction T1 reading and locking
+    -- T1 reads the current state
     SELECT enrolled_count, capacity
       INTO v_enrolled, v_capacity
       FROM Courses
-     WHERE course_id = 3;   -- CS315 (capacity 5, 1 enrolled)
+     WHERE course_id = 3;   -- CS315
 
-    RAISE NOTICE 'T1 sees: enrolled=%, capacity=%.', v_enrolled, v_capacity;
+    RAISE NOTICE 'T1 reads: enrolled=%, capacity=%.', v_enrolled, v_capacity;
 
     IF v_enrolled < v_capacity THEN
-        -- T1 enrolls Iris (student 9) in CS315
-        -- (Iris has CS201 completed so prereq is met)
+        -- Iris (student 9) has CS201 completed so she can enroll in CS315
         SAVEPOINT sp_t1;
         INSERT INTO Enrollments (student_id, course_id, status)
         VALUES (9, 3, 'enrolled');
         RAISE NOTICE 'T1 COMMITTED: Iris enrolled in CS315.';
-        ROLLBACK TO SAVEPOINT sp_t1;  -- clean up for demo
+        ROLLBACK TO SAVEPOINT sp_t1;  -- rollback so test data stays clean
     ELSE
-        RAISE NOTICE 'T1 ABORTED: no seats available.';
+        RAISE NOTICE 'T1 ABORTED: course is full.';
     END IF;
 END $$;
 
 
--- ── Cleanup: remove Charlie's EE301 enrollment from Example A ──
+-- cleanup: remove Charlie's EE301 enrollment from Example A
 DELETE FROM Enrollments
 WHERE student_id = 3 AND course_id = 6;

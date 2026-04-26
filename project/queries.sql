@@ -1,10 +1,8 @@
 -- CS315 Project: Smart Course Registration and Scheduling System
 -- Milestone 2: Basic Queries
--- Run after: schema.sql, seed.sql
+-- run after schema.sql and seed.sql
 
--- ============================================================
--- Q1: All courses a specific student is currently enrolled in
--- ============================================================
+-- Q1: what courses is Alice currently enrolled in?
 SELECT
     c.course_code,
     c.title,
@@ -21,9 +19,7 @@ WHERE  e.student_id = 1           -- Alice
 ORDER  BY c.schedule_day, c.schedule_start;
 
 
--- ============================================================
--- Q2: All students enrolled in a given course
--- ============================================================
+-- Q2: who is enrolled in CS201?
 SELECT
     s.roll_no,
     s.name,
@@ -38,9 +34,7 @@ WHERE  e.course_id = 2            -- CS201
 ORDER  BY s.roll_no;
 
 
--- ============================================================
--- Q3: Courses with available seats
--- ============================================================
+-- Q3: which courses still have open seats?
 SELECT
     c.course_code,
     c.title,
@@ -54,9 +48,7 @@ WHERE  c.enrolled_count < c.capacity
 ORDER  BY seats_available DESC;
 
 
--- ============================================================
--- Q4: Full timetable for a student (current enrollments)
--- ============================================================
+-- Q4: Alice's full timetable — what she has on each day
 SELECT
     c.schedule_day                       AS day,
     c.schedule_start                     AS start_time,
@@ -74,9 +66,7 @@ WHERE  e.student_id = 1           -- Alice
 ORDER  BY c.schedule_day, c.schedule_start;
 
 
--- ============================================================
--- Q5: Students who have completed a course (grade/history)
--- ============================================================
+-- Q5: students who have already completed a course (for transcript/history view)
 SELECT
     s.roll_no,
     s.name,
@@ -91,10 +81,8 @@ WHERE  e.status = 'completed'
 ORDER  BY s.roll_no, c.course_code;
 
 
--- ============================================================
--- Q6: Courses that have unfulfilled prerequisites for a student
---     (courses the student CANNOT enroll in yet)
--- ============================================================
+-- Q6: for Charlie, which courses cant he enroll in yet because hes missing prereqs?
+-- groups missing prereqs per course so you can see exactly whats needed
 SELECT
     c.course_code,
     c.title,
