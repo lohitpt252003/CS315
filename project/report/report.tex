@@ -1,0 +1,213 @@
+    \documentclass[11pt]{article}
+
+    \usepackage{fullpage}
+    \usepackage{graphicx}
+    \usepackage{times}
+    \usepackage{url}
+    \usepackage{booktabs}
+
+    \title{\bf Smart Course Registration and Scheduling System}
+    \author{
+        \bf Lohit P Talavar \qquad 210564 \qquad lohitpt21@iitk.ac.in
+    }
+    \date{CS315 Final Project --- Indian Institute of Technology Kanpur}
+
+    \begin{document}
+
+    \maketitle
+
+    \begin{abstract}
+    In this project I have designed and implemented a relational database system
+    for managing university course registrations using PostgreSQL. The schema consist
+    of six main entities which are Students, Courses, Instructors, Departments,
+    Enrollments and Prerequisites. Three real world business rules are enforced
+    directly at the database layer itself — prerequisite checking, seat limit and
+    schedule conflict detection. All tables are normalized upto Third Normal Form.
+    Six indexes including a partial index on active enrollments are added to improve
+    query performance. The project covers all major topics of CS315 like ER modeling,
+    normalization, SQL, constraints, transactions, triggers, stored procedures and views.
+    \end{abstract}
+
+    % ------------------------------------------------------------------
+    \section{Motivation and Problem Statement}
+    % ------------------------------------------------------------------
+
+    Course registration in a university involves lot of rules and constraints that
+    needs to be handled properly. A student cannot enroll in a course without first
+    completing its prerequisite courses. Also the course should not be full and there
+    should be no clash in the timetable with other courses the student is already
+    enrolled in.
+
+    Most of the time these rules are checked in the application code which means
+    any client that directly access the database can bypass them easily. The main
+    goal of this project was to push all these three constraints inside the database
+    itself using triggers and check constraints so that no one can bypass them.
+
+    Apart from correctness the system also needs to support efficient queries for
+    common operations like timetable look ups, roster retrieval, enrollment validation
+    and occupancy reporting. This domain directly maps to the CS315 syllabus topics ---
+    ER modeling, normalization, indexing, transactions and views --- all in one single
+    coherent system. No external APIs or complex real time data was needed, everything
+    can be done purely in PostgreSQL which made it a good choice.
+
+    % ------------------------------------------------------------------
+    \section{Methodology}
+    % ------------------------------------------------------------------
+
+    I followed a milestone based approach where I first did the design and then
+    started implementing each part one by one.
+
+    \paragraph{ER Design.}
+    I identified six entities and mapped out all the relationships before writing
+    any SQL. Some important design decisions were made at this stage. First I decided
+    to use a separate \texttt{Prerequisites} table instead of a single \texttt{prereq\_id}
+    column in the Courses table, this is because a single column can only store one
+    prerequisite but a course like CS401 requires both CS315 and MTH201 so that would
+    not work. Second I stored \texttt{enrolled\_count} as a column in Courses table
+    itself (which is technically denormalization) so that the seat limit CHECK constraint
+    can fire instantly, and a trigger keeps this count updated. Third the timeslot was
+    stored as three separate columns (day, start time, end time) instead of a single
+    string so that SQL can do proper time comparison for conflict detection.
+
+    \paragraph{Normalization.}
+    All tables were checked and proven to be in Third Normal Form by analyzing functional
+    dependencies. The most important violations I avoided were storing \texttt{dept\_name}
+    in the Students table (this would be a transitive dependency) and storing instructor
+    details in the Courses table. Foreign keys are used instead everywhere.
+
+    \paragraph{Schema and Sample Data.}
+    The DDL defines all six tables with primary keys, foreign keys, NOT NULL and UNIQUE
+    constraints. For the seed data I added 3 departments, 4 instructors, 8 courses,
+    10 students and 22 enrollments. I also made sure to include edge cases like a full
+    course, a course with prerequisites, and a pair of courses with same timeslot.
+
+    \paragraph{Business Logic and Constraints.}
+    A single BEFORE INSERT trigger handles all the three business rule checks before
+    any row is inserted into the Enrollments table. It reads the Courses row for seat
+    check, queries Enrollments for completed prerequisites, and checks time overlap
+    with the students existing active courses.
+
+    \paragraph{Indexing.}
+    Six indexes were added based on which columns appear most in WHERE clauses.
+    I used EXPLAIN ANALYZE to compare query plans before and after adding indexes.
+
+    \paragraph{Transactions and Triggers.}
+    A separate AFTER trigger maintains the \texttt{enrolled\_count} after every insert,
+    update or delete on Enrollments. The enrollment transaction uses SELECT FOR UPDATE
+    to lock the course row so that two students cannot grab the same last seat
+    simultaneously. I also wrote a stored procedure \texttt{enroll\_student()} that
+    wraps the whole flow.
+
+    \paragraph{Views and Reporting.}
+    Three views are created for common reporting needs. Six complex analytical queries
+    were also written covering occupancy rates, credit loads and instructor workload.
+
+    % ------------------------------------------------------------------
+    \section{Implementation and Results}
+    % ------------------------------------------------------------------
+
+    The complete code is available at \url{https://github.com/lohitpt252003/CS315}.
+
+    \paragraph{Schema.}
+    The \texttt{schema.sql} file defines all six tables. Some of the important
+    constraints are shown below:
+
+    \begin{verbatim}
+    CONSTRAINT chk_capacity_limit CHECK (enrolled_count <= capacity)
+    CHECK (status IN ('enrolled','dropped','waitlisted','completed'))
+    CONSTRAINT no_self_prereq     CHECK (course_id <> prereq_course_id)
+    UNIQUE (student_id, course_id)
+    \end{verbatim}
+
+    \paragraph{Business Rule Testing.}
+    Table~\ref{tab:tests} shows the test cases I ran against the seed data to verify
+    all three constraints are working correctly.
+
+    \begin{table}[h]
+    \centering
+    \begin{tabular}{lll}
+    \toprule
+    \textbf{Test} & \textbf{Expected} & \textbf{Outcome} \\
+    \midrule
+    4th student in CS201 (capacity 3) & Rejected & course full (3/3) \\
+    Charlie enrolls in CS315 (no prereq) & Rejected & prerequisite not met \\
+    Charlie enrolls in EE201 (timeslot clash) & Rejected & schedule conflict \\
+    Charlie enrolls in EE301 (all ok) & Accepted & row inserted successfully \\
+    Frank drops EE301 & enrolled\_count $-1$ & trigger verified \\
+    \bottomrule
+    \end{tabular}
+    \caption{Constraint test results using seed data.}
+    \label{tab:tests}
+    \end{table}
+
+    \paragraph{Indexing Results.}
+    Among all six indexes, the partial index on active enrollments was the most useful
+    one:
+
+    \begin{verbatim}
+    CREATE INDEX idx_enrollments_enrolled_partial
+        ON Enrollments(student_id, course_id)
+        WHERE status = 'enrolled';
+    \end{verbatim}
+
+    This index is used on every enrollment attempt by both the prerequisite check and
+    the conflict check. It is also smaller than a full index since it excludes
+    completed and dropped rows. Before adding indexes the planner was doing sequential
+    scans on Enrollments. After indexes it uses Index Scan which is significantly faster
+    when the table grows large.
+
+    \paragraph{Transaction and ACID.}
+    The enrollment transaction shows all four ACID properties. Atomicity means the
+    insert and count update happens together or not at all. Consistency is maintained
+    by the trigger. Isolation is handled by FOR UPDATE lock which prevents two
+    transactions from reading same available seat. Durability is ensured by COMMIT.
+
+    \paragraph{Views Output.}
+    Some sample outputs from the three views with seed data:
+    \begin{itemize}
+    \item \texttt{student\_transcript} for Alice: shows CS201 (MWF 10:00--11:00) and
+            MTH101 (MWF 11:00--12:00).
+    \item \texttt{course\_roster} for CS201: 3 students enrolled, 0 seats remaining.
+    \item \texttt{department\_summary}: CS department has 4 courses with total 8 enrollments.
+    \end{itemize}
+
+    % ------------------------------------------------------------------
+    \section{Discussion and Limitations}
+    % ------------------------------------------------------------------
+
+    There are few limitations in the current implementation that should be noted.
+
+    \paragraph{Day pattern matching.}
+    The schedule conflict detection is using exact string comparison on
+    \texttt{schedule\_day}. So two courses like \texttt{'MWF'} and \texttt{'MW'} would
+    not be detected as conflicting even thought they share Monday and Wednesday. A proper
+    solution would be to use bitmask representation for days. This is a known limitation
+    and was kept simple intentionally.
+
+    \paragraph{Concurrency bottle neck.}
+    Every enrollment locks the Courses row to update enrolled\_count. If many students
+    try to register for same popular course at same time, they will all be queued one
+    after another. At large scale this can become a serious performance bottleneck.
+    Some solutions like optimistic locking or queue based enrollment system would help
+    here.
+
+    \paragraph{No archiving.}
+    The Enrollments table keeps growing with no way to archive old data. Completed
+    enrollments from past semesters slow down queries that filter by active status.
+    Partitioning by semester would be the right solution for this.
+
+    \paragraph{Timeslot model simplification.}
+    Currently each course is assumed to meet on same set of days every week. Courses
+    with irregular schedules like alternating weeks lab sessions cannot be stored in
+    this schema without changing it.
+
+    % ------------------------------------------------------------------
+    \section{Contributions}
+    % ------------------------------------------------------------------
+
+    Lohit P Talavar did everything including the ER design, schema definition,
+    normalization proof, seed data, all SQL files for constraints, indexing, triggers,
+    transactions, stored procedures, views and analytical queries, and also wrote this
+    report.
+
+    \end{document}
